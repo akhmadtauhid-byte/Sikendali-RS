@@ -177,8 +177,8 @@
    ANON KEY aman ditaruh di frontend — tabel-tabel di database tetap
    terkunci oleh RLS, ANON KEY hanya dipakai untuk memanggil Edge
    Function, bukan untuk mengakses tabel langsung. */
-const SUPABASE_URL = "https://boypquynhddizdiyepuq.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_k-1r9U_iFo5TWgSfFbF_hQ_Lt0BF_SG";
+const SUPABASE_URL = "https://GANTI-DENGAN-PROJECT-REF.supabase.co";
+const SUPABASE_ANON_KEY = "GANTI-DENGAN-ANON-KEY-ANDA";
 const FN = (name) => `${SUPABASE_URL}/functions/v1/${name}`;
 
 async function callFn(name, payload) {
@@ -466,9 +466,128 @@ function pageBidang(id){
     <div class="section-title"><h2>Supervisor di Bawah ${b.manajer}</h2><span class="hint">Klik untuk buka/tutup detail</span></div>
     ${supvBlocks}
 
+    ${renderRBASection(b)}
+
     <div class="section-title"><h2>Tren Skor ${b.nama}</h2></div>
     <div class="chart-wrap"><canvas id="chartBidangTren" height="80"></canvas></div>
   `;
+}
+
+/* ================= RBA: PROGRAM KERJA & ANGGARAN ================= */
+function formatRupiah(n){
+  return "Rp " + (Number(n)||0).toLocaleString("id-ID");
+}
+function canEditProgramClient(prog){
+  if(roleCanEdit(currentBidangId)) return true;
+  if(prog.pemilikTipe==='supv' && currentRole===('supv:'+prog.pemilikId)) return true;
+  if(currentRole===('prog:'+prog.id)) return true;
+  return false;
+}
+function renderRBASection(b){
+  const progs = b.programKerja || [];
+  const canManageProgram = roleCanEdit(b.id); // manajer bidang atau wadir: boleh tambah/hapus program & hapus transaksi
+
+  const rows = progs.map(p=>{
+    const totalRealisasi = (p.transaksi||[]).reduce((a,t)=>a+Number(t.jumlah||0),0);
+    const pctPakai = p.paguAnggaran>0 ? (totalRealisasi/p.paguAnggaran*100) : 0;
+    const pemilikNama = p.pemilikTipe==='supv'
+      ? (b.supervisors.find(s=>s.id===p.pemilikId)?.nama || p.pemilikId)
+      : b.manajer;
+    const canRecord = canEditProgramClient(p);
+    const badgeCls = pctPakai>100 ? 'red' : (pctPakai>=80 ? 'amber' : 'green');
+
+    const txRows = (p.transaksi||[]).map(t=>`
+      <tr>
+        <td class="mono">${t.tanggal||'—'}</td>
+        <td>${t.uraian||''}</td>
+        <td class="mono">${formatRupiah(t.jumlah)}</td>
+        <td class="kpi-meta">${t.dicatatOleh||''}</td>
+        <td>${canManageProgram?`<button class="btn small danger" data-del-tx="${t.id}" data-prog="${p.id}">Hapus</button>`:''}</td>
+      </tr>`).join("");
+
+    return `<div class="supv-block">
+      <div class="supv-head" data-toggle-prog="${p.id}">
+        <h4>${p.nama} <span class="kpi-meta">(${p.tahun||'-'} &middot; ${pemilikNama})</span></h4>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span class="mono" style="font-size:12px;">${formatRupiah(totalRealisasi)} / ${formatRupiah(p.paguAnggaran)}</span>
+          <span class="badge ${badgeCls}">${pctPakai.toFixed(0)}%</span>
+        </div>
+      </div>
+      <div class="supv-body" id="prog-body-${p.id}">
+        ${p.uraian?`<div class="kpi-meta" style="margin-bottom:10px;">${p.uraian}</div>`:''}
+        <table><thead><tr><th>Tanggal</th><th>Uraian</th><th>Jumlah</th><th>Dicatat oleh</th><th></th></tr></thead>
+        <tbody>${txRows || '<tr><td colspan="5" class="kpi-meta">Belum ada realisasi tercatat.</td></tr>'}</tbody></table>
+        ${canRecord?`
+        <div class="btn-row" style="align-items:flex-end;">
+          <input type="text" class="cell-input" style="width:110px;" placeholder="YYYY-MM-DD" id="tx-tgl-${p.id}">
+          <input type="text" class="cell-input" style="width:180px;" placeholder="Uraian" id="tx-uraian-${p.id}">
+          <input type="number" class="cell-input" style="width:120px;" placeholder="Jumlah (Rp)" id="tx-jumlah-${p.id}">
+          <button class="btn small primary" data-add-tx="${p.id}">+ Catat Realisasi</button>
+        </div>`:''}
+        ${canManageProgram?`<div class="btn-row"><button class="btn small danger" data-del-prog="${p.id}">Hapus Program Kerja Ini</button></div>`:''}
+      </div>
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="section-title"><h2>Program Kerja &amp; Anggaran (RBA)</h2><span class="hint">Klik nama program untuk buka/tutup detail realisasi</span></div>
+    ${progs.length?rows:'<div class="panel-note">Belum ada program kerja untuk bidang ini.</div>'}
+    ${canManageProgram?`<div class="btn-row" style="margin-top:14px;"><button class="btn primary" id="btnAddProgram">+ Tambah Program Kerja</button></div>`:''}
+  `;
+}
+function showAddProgramModal(bidangId){
+  const b = appData.bidang.find(x=>x.id===bidangId);
+  const modal = document.getElementById("modalBox");
+  const bg = document.getElementById("modalBg");
+  const supvOptions = b.supervisors.map(s=>`<option value="${s.id}">${s.nama}</option>`).join("");
+  modal.innerHTML = `
+    <h3>Tambah Program Kerja</h3>
+    <p style="font-size:12.5px;color:var(--muted);margin-top:-6px;">Untuk ${b.manajer}</p>
+    <label>Nama Program</label>
+    <input type="text" id="pkNama" placeholder="Contoh: Pengadaan Alat X">
+    <label>Tahun</label>
+    <input type="text" id="pkTahun" value="${(appData.currentPeriod||'').split('-')[0]||''}">
+    <label>Uraian (opsional)</label>
+    <input type="text" id="pkUraian" placeholder="Deskripsi singkat">
+    <label>Pemilik Program</label>
+    <select id="pkPemilik">
+      <option value="manajer">${b.manajer} (langsung)</option>
+      ${supvOptions}
+    </select>
+    <label>Pagu Anggaran (Rp)</label>
+    <input type="number" id="pkPagu" placeholder="0">
+    <div class="btn-row" style="margin-top:14px;">
+      <button class="btn" id="pkCancel">Batal</button>
+      <button class="btn primary" id="pkSubmit">Simpan</button>
+    </div>
+  `;
+  bg.classList.add("open");
+  document.getElementById("pkCancel").onclick = ()=>bg.classList.remove("open");
+  document.getElementById("pkSubmit").onclick = async ()=>{
+    const nama = document.getElementById("pkNama").value.trim();
+    if(!nama){ toast("Nama program wajib diisi."); return; }
+    const pemilikVal = document.getElementById("pkPemilik").value;
+    const btn = document.getElementById("pkSubmit");
+    btn.textContent = "Menyimpan..."; btn.disabled = true;
+    try{
+      await callFn("program-kerja", {
+        pin: currentPin, action: "add", bidangId,
+        nama,
+        tahun: document.getElementById("pkTahun").value,
+        uraian: document.getElementById("pkUraian").value,
+        pemilikTipe: pemilikVal==='manajer' ? 'manajer' : 'supv',
+        pemilikId: pemilikVal==='manajer' ? bidangId : pemilikVal,
+        paguAnggaran: document.getElementById("pkPagu").value,
+      });
+      bg.classList.remove("open");
+      await fetchAppData();
+      render();
+      toast("Program kerja ditambahkan.");
+    }catch(e){
+      toast("Gagal menyimpan: " + e.message);
+      btn.textContent = "Simpan"; btn.disabled = false;
+    }
+  };
 }
 
 /* ================= PAGE: EVALUASI PERIODIK ================= */
@@ -717,6 +836,54 @@ function attachHandlers(){
         toast("Gagal menyimpan: " + e.message);
         btn.disabled = false;
       }
+    };
+  });
+
+  document.querySelectorAll('[data-toggle-prog]').forEach(el=>{
+    el.onclick = ()=>{
+      const id = el.dataset.toggleProg;
+      document.getElementById("prog-body-"+id).classList.toggle("open");
+    };
+  });
+
+  const btnAddProgram = document.getElementById("btnAddProgram");
+  if(btnAddProgram) btnAddProgram.onclick = ()=>showAddProgramModal(currentBidangId);
+
+  document.querySelectorAll('[data-del-prog]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm("Hapus program kerja ini beserta seluruh riwayat realisasinya? Tindakan ini tidak bisa dibatalkan.")) return;
+      try{
+        await callFn("program-kerja", { pin: currentPin, action: "delete", bidangId: currentBidangId, programId: btn.dataset.delProg });
+        await fetchAppData(); render(); toast("Program kerja dihapus.");
+      }catch(e){ toast("Gagal menghapus: " + e.message); }
+    };
+  });
+
+  document.querySelectorAll('[data-add-tx]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const progId = btn.dataset.addTx;
+      const tanggal = document.getElementById("tx-tgl-"+progId).value;
+      const uraian = document.getElementById("tx-uraian-"+progId).value;
+      const jumlah = document.getElementById("tx-jumlah-"+progId).value;
+      if(!jumlah || Number(jumlah)<=0){ toast("Isi jumlah realisasi lebih dari 0."); return; }
+      btn.textContent = "Menyimpan..."; btn.disabled = true;
+      try{
+        await callFn("transaksi-anggaran", { pin: currentPin, action: "add", bidangId: currentBidangId, programId: progId, tanggal, uraian, jumlah });
+        await fetchAppData(); render(); toast("Realisasi anggaran tercatat.");
+      }catch(e){
+        toast("Gagal menyimpan: " + e.message);
+        btn.textContent = "+ Catat Realisasi"; btn.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll('[data-del-tx]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm("Hapus transaksi realisasi ini?")) return;
+      try{
+        await callFn("transaksi-anggaran", { pin: currentPin, action: "delete", bidangId: currentBidangId, programId: btn.dataset.prog, transaksiId: btn.dataset.delTx });
+        await fetchAppData(); render(); toast("Transaksi dihapus.");
+      }catch(e){ toast("Gagal menghapus: " + e.message); }
     };
   });
 
